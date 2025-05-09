@@ -1,0 +1,5 @@
+# test-data/selene.toml
+std = "lua51" # Specify Lua standard
+
+# Example: Disable a specific lint
+# unused_variable = "allow"

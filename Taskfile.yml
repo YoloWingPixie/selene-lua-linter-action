@@ -1,0 +1,208 @@
+version: '3'
+
+vars:
+  IMAGE_NAME: selene-lua-linter-action
+  IMAGE_TAG: latest
+  FULL_IMAGE_NAME: "{{.IMAGE_NAME}}:{{.IMAGE_TAG}}"
+  TEST_DATA_DIR: ./test-data
+  CI_TEST_FILES_DIR: ./ci-test-files
+  STATUS_FILE: .task-build-status
+  PROJECT_DIR: "{{.TASK_DIR}}"
+  # Default NULL_DEVICE for non-Windows
+  NULL_DEVICE: /dev/null
+
+platforms:
+  windows:
+    vars:
+      NULL_DEVICE: NUL
+
+tasks:
+  build:
+    desc: Build the Docker image for the Selene action.
+    cmds:
+      - docker build -t {{.FULL_IMAGE_NAME}} .
+      - echo "Docker image {{.FULL_IMAGE_NAME}} built successfully" > {{.STATUS_FILE}}
+    sources:
+      - Dockerfile
+      - install_selene.sh
+      - cmd/action/main.go
+    generates:
+      - "{{.STATUS_FILE}}"
+    method: timestamp
+
+  lint:local:
+    desc: Run the Selene linter locally using the Docker image (generic example).
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.TEST_DATA_DIR}}/selene.toml" \
+          -e INPUT_LINT-PATH="{{.TEST_DATA_DIR}}" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e INPUT_FAIL-ON-WARNINGS="false" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:basic-lint:
+    desc: Run basic lint test locally.
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/basic-lint/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/basic-lint" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e INPUT_FAIL-ON-WARNINGS="false" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:working-dir:
+    desc: Run working directory test locally.
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="selene_config.toml" \
+          -e INPUT_LINT-PATH="." \
+          -e INPUT_WORKING-DIRECTORY="{{.CI_TEST_FILES_DIR}}/working-dir-test/sub/dir" \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e INPUT_FAIL-ON-WARNINGS="false" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:selene-args:
+    desc: Run selene-args test locally.
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/selene-args-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/selene-args-test/ugly.lua" \
+          -e INPUT_SELENE-ARGS="--display-style quiet" \
+          -e INPUT_REPORT-AS-ANNOTATIONS="false" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_FAIL-ON-WARNINGS="false" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:fail-on-warn:
+    desc: Run fail-on-warnings test locally (expected to fail).
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/fail-on-warn-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/fail-on-warn-test/warning.lua" \
+          -e INPUT_FAIL-ON-WARNINGS="true" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:specific-file-good:
+    desc: Run specific file test (good.lua) locally (expected to pass).
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/specific-file-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/specific-file-test/good.lua" \
+          -e INPUT_FAIL-ON-WARNINGS="true" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:specific-file-bad:
+    desc: Run specific file test (bad.lua) locally (expected to fail).
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/specific-file-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/specific-file-test/bad.lua" \
+          -e INPUT_FAIL-ON-WARNINGS="true" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:selene-light:
+    desc: Run selene-light variant test locally.
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/selene-light-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/selene-light-test" \
+          -e INPUT_SELENE-VARIANT="selene-light" \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e INPUT_FAIL-ON-WARNINGS="false" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:syntax-error:
+    desc: Run syntax error test locally (expected to fail).
+    deps: [build]
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.PROJECT_DIR}}:/github/workspace" \
+          -e INPUT_CONFIG-PATH="{{.CI_TEST_FILES_DIR}}/syntax-error-test/selene.toml" \
+          -e INPUT_LINT-PATH="{{.CI_TEST_FILES_DIR}}/syntax-error-test/syntax_error.lua" \
+          -e INPUT_FAIL-ON-WARNINGS="true" \
+          -e INPUT_WORKING-DIRECTORY="." \
+          -e INPUT_REPORT-AS-ANNOTATIONS="true" \
+          -e GITHUB_WORKSPACE="/github/workspace" \
+          {{.FULL_IMAGE_NAME}}
+
+  test:all:
+    desc: Run all local tests, verifying expected outcomes.
+    cmds:
+      - echo "Running test:basic-lint (expected to pass)"
+      - task: test:basic-lint
+      - echo "Running test:working-dir (expected to pass)"
+      - task: test:working-dir
+      - echo "Running test:selene-args (expected to pass)"
+      - task: test:selene-args
+      - echo "Running test:fail-on-warn (expected to fail)"
+      - cmd: "! (task test:fail-on-warn 2>{{.NULL_DEVICE}}) || true"
+      - echo "Running test:specific-file-good (expected to pass)"
+      - task: test:specific-file-good
+      - echo "Running test:specific-file-bad (expected to fail)"
+      - cmd: "! (task test:specific-file-bad 2>{{.NULL_DEVICE}}) || true"
+      - echo "Running test:selene-light (expected to pass)"
+      - task: test:selene-light
+      - echo "Running test:syntax-error (expected to fail)"
+      - cmd: "! (task test:syntax-error 2>{{.NULL_DEVICE}}) || true"
+
+  clean:
+    desc: Remove the built Docker image and status file.
+    cmds:
+      - docker rmi -f {{.FULL_IMAGE_NAME}} || true
+      - cmd: powershell -NoProfile -NonInteractive -Command "if (Test-Path '{{.STATUS_FILE}}') { Remove-Item -Path '{{.STATUS_FILE}}' -Force -ErrorAction SilentlyContinue }"
+        platforms: [windows]
+      - cmd: rm -f "{{.STATUS_FILE}}"
+        platforms: [linux, darwin]
+
+  ci:run:
+    desc: Cleans, builds, and then lints the project (generic example).
+    cmds:
+      - task: clean
+      - task: build
+      - task: lint:local # This is the old generic one, consider removing or renaming if test:all is preferred
+
+  default:
+    cmds:
+      - task: ci:run

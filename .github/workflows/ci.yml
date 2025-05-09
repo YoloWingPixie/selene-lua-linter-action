@@ -1,0 +1,150 @@
+name: CI - Selene Lua Linter Action
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-case:
+          - basic-lint
+          - working-dir-test
+          - selene-args-test
+          - fail-on-warn-test
+          - specific-file-test
+          - selene-light-test
+          - syntax-error-test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Selene Lua Linter Action (Basic)
+        if: matrix.test-case == 'basic-lint'
+        uses: ./
+        with:
+          config-path: 'ci-test-files/basic-lint/selene.toml'
+          lint-path: 'ci-test-files/basic-lint'
+          report-as-annotations: 'true'
+          fail-on-warnings: 'false'
+
+  # Test with a different working directory
+      - name: Run Selene Action (Working Directory Test)
+        if: matrix.test-case == 'working-dir-test'
+        uses: ./
+        with:
+          working-directory: './ci-test-files/working-dir-test/sub/dir'
+          config-path: 'selene_config.toml'
+          lint-path: '.'
+          report-as-annotations: 'true'
+          fail-on-warnings: 'false'
+
+  # Test with additional selene-args
+      - name: Run Selene Action (Selene Args Test)
+        if: matrix.test-case == 'selene-args-test'
+        uses: ./
+        with:
+          config-path: 'ci-test-files/selene-args-test/selene.toml'
+          lint-path: 'ci-test-files/selene-args-test/ugly.lua'
+          selene-args: '--display-style quiet'
+          report-as-annotations: 'false'
+
+  # Test fail-on-warnings: true
+      - name: Run Selene Action (Fail on Warnings Test)
+        if: matrix.test-case == 'fail-on-warn-test'
+        uses: ./
+        continue-on-error: true
+        id: fail_on_warn_step
+        with:
+          config-path: 'ci-test-files/fail-on-warn-test/selene.toml'
+          lint-path: 'ci-test-files/fail-on-warn-test/warning.lua'
+          fail-on-warnings: 'true'
+
+      - name: Verify fail-on-warnings outcome
+        if: matrix.test-case == 'fail-on-warn-test' && steps.fail_on_warn_step.outcome != 'failure'
+        run: |
+          echo "Error: Action was expected to fail due to 'fail-on-warnings: true' but it succeeded."
+          exit 1
+      - name: Confirm expected failure for fail-on-warnings
+        if: matrix.test-case == 'fail-on-warn-test' && steps.fail_on_warn_step.outcome == 'failure'
+        run: |
+          echo "Action correctly failed as expected with fail-on-warnings: true."
+
+  # Test linting a specific file
+      - name: Run Selene Action (Specific File Test - good.lua)
+        if: matrix.test-case == 'specific-file-test'
+        uses: ./
+        id: specific_file_good
+        with:
+          config-path: 'ci-test-files/specific-file-test/selene.toml'
+          lint-path: 'ci-test-files/specific-file-test/good.lua'
+          fail-on-warnings: 'true'
+
+      - name: Verify specific file test (good.lua) outcome
+        if: matrix.test-case == 'specific-file-test' && steps.specific_file_good.outcome != 'success'
+        run: |
+          echo "Error: Action was expected to succeed for good.lua but it failed."
+          exit 1
+      
+      - name: Run Selene Action (Specific File Test - bad.lua with fail)
+        if: matrix.test-case == 'specific-file-test'
+        uses: ./
+        id: specific_file_bad
+        continue-on-error: true
+        with:
+          config-path: 'ci-test-files/specific-file-test/selene.toml'
+          lint-path: 'ci-test-files/specific-file-test/bad.lua'
+          fail-on-warnings: 'true'
+
+      - name: Verify specific file test (bad.lua) outcome
+        if: matrix.test-case == 'specific-file-test' && steps.specific_file_bad.outcome != 'failure'
+        run: |
+          echo "Error: Action was expected to fail for bad.lua but it succeeded."
+          exit 1
+        
+  # Test with selene-light variant
+      - name: Run Selene Lua Linter Action (Selene Light)
+        if: matrix.test-case == 'selene-light-test'
+        uses: ./
+        with:
+          config-path: 'ci-test-files/selene-light-test/selene.toml'
+          lint-path: 'ci-test-files/selene-light-test'
+          selene-variant: 'selene-light'
+          report-as-annotations: 'true'
+          fail-on-warnings: 'false'
+
+  # Test with a syntax error
+      - name: Run Selene Action (Syntax Error Test)
+        if: matrix.test-case == 'syntax-error-test'
+        uses: ./
+        id: syntax_error_step
+        continue-on-error: true
+        with:
+          config-path: 'ci-test-files/syntax-error-test/selene.toml'
+          lint-path: 'ci-test-files/syntax-error-test/syntax_error.lua'
+          fail-on-warnings: 'false'
+
+      - name: Verify syntax error outcome
+        if: matrix.test-case == 'syntax-error-test' && steps.syntax_error_step.outcome != 'failure'
+        run: |
+          echo "Error: Action was expected to fail due to a syntax error but it succeeded."
+          exit 1
+      - name: Confirm expected failure for syntax error
+        if: matrix.test-case == 'syntax-error-test' && steps.syntax_error_step.outcome == 'failure'
+        run: |
+          echo "Action correctly failed as expected due to syntax error."
+  build-docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Build Docker image
+        run: docker build . -t selene-linter-action-test

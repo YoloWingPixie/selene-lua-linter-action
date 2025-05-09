@@ -1,0 +1,55 @@
+name: 'Selene Lua Linter Action'
+description: 'Lint Lua code with Selene. Highly configurable, supports annotations, and uses a Docker container for consistent results.'
+author: 'YoloWingPixie'
+branding:
+  icon: 'moon'
+  color: 'purple'
+inputs:
+  working-directory:
+    description: >
+      Directory where Selene will be executed, relative to
+      repository root.
+    required: false
+    default: '.'
+  config-path:
+    description: >
+      Path to Selene configuration file (e.g., selene.toml),
+      relative to repository root.
+    required: true
+  lint-path:
+    description: 'File or directory to lint, relative to `working-directory`.'
+    required: false
+    default: '.'
+  selene-args:
+    description: 'Additional arguments to pass directly to the Selene CLI.'
+    required: false
+    default: ''
+  fail-on-warnings:
+    description: >
+      If true, the action fails if Selene reports any warnings
+      (exit code 1).
+    required: false
+    default: 'false'
+  report-as-annotations:
+    description: >
+      If true, Selene findings are reported as GitHub code
+      annotations.
+    required: false
+    default: 'true'
+  selene-version:
+    description: >
+      Version of Selene to use (e.g., 'v0.28.0', 'latest').
+      'latest' resolves to the newest release.
+    required: false
+    default: 'latest'
+  selene-repo:
+    description: 'Repository for Selene releases (owner/repo).'
+    required: false
+    default: 'Kampfkarren/selene'
+  selene-variant:
+    description: 'Selene variant to download (selene or selene-light).'
+    required: false
+    default: 'selene'
+runs:
+  using: 'docker'
+  image: 'Dockerfile'

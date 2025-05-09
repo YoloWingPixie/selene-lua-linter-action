@@ -1,0 +1,131 @@
+name: CD - Release Selene Lua Linter Action
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create releases and tags
+    outputs:
+      new_tag: ${{ steps.tagger.outputs.new_tag }}
+      changelog: ${{ steps.generate_changelog.outputs.changelog }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Git User
+        run: |
+          git config user.name "GitHub Action Bot"
+          git config user.email "actions@github.com"
+
+      - name: Get current version (or initialize if none)
+        id: get_version
+        run: |
+          git fetch --tags --force
+          # Get the latest v-prefixed tag. If no v-tag, start with v0.
+          LATEST_V_TAG=$(git tag -l "v[0-9]*" --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST_V_TAG" ]; then
+            echo "No existing v-tags found. Initializing with v0."
+            LATEST_V_TAG="v0"
+          fi
+          echo "Latest v-tag is: $LATEST_V_TAG"
+          echo "latest_tag=$LATEST_V_TAG" >> $GITHUB_OUTPUT
+
+      - name: Calculate next version
+        id: calculate_next_version
+        run: |
+          CURRENT_VERSION_NUMBER=$(echo "${{ steps.get_version.outputs.latest_tag }}" | sed 's/v//')
+          NEXT_VERSION_NUMBER=$((CURRENT_VERSION_NUMBER + 1))
+          NEW_TAG="v${NEXT_VERSION_NUMBER}"
+          echo "Current version number: $CURRENT_VERSION_NUMBER"
+          echo "Next version number: $NEXT_VERSION_NUMBER"
+          echo "New tag will be: $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          
+          # Check if this commit is already tagged with the new_tag
+          if git rev-parse -q --verify "refs/tags/$NEW_TAG" >/dev/null; then
+            echo "Tag $NEW_TAG already exists for this commit. Skipping release."
+            echo "skip_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Changelog (Placeholder)
+        id: generate_changelog
+        if: steps.calculate_next_version.outputs.skip_release == 'false'
+        run: |
+          echo "Generating changelog for ${{ steps.calculate_next_version.outputs.new_tag }}..."
+          # Get commits since the last v-tag
+          LAST_V_TAG="${{ steps.get_version.outputs.latest_tag }}"
+          COMMIT_RANGE=""
+          if [ "$LAST_V_TAG" == "v0" ] && [ $(git tag -l "v[0-9]*" | wc -l) -eq 0 ]; then
+            # This is the very first release (v1 from v0 placeholder)
+            COMMIT_RANGE=$(git rev-parse HEAD)
+            echo "Changelog for initial release:" > changelog.md
+            git log --pretty=format:"- %s (%h)" $COMMIT_RANGE >> changelog.md
+          else
+            COMMIT_RANGE="$LAST_V_TAG..HEAD"
+            echo "Changelog since $LAST_V_TAG:" > changelog.md
+            git log --pretty=format:"- %s (%h)" $COMMIT_RANGE >> changelog.md
+          fi
+          
+          echo "" >> changelog.md
+          echo "View [full diff](https://github.com/${{ github.repository }}/compare/$LAST_V_TAG...${{ steps.calculate_next_version.outputs.new_tag }})" >> changelog.md
+          
+          CHANGELOG_CONTENT=$(cat changelog.md)
+          # Escape for multiline output
+          CHANGELOG_CONTENT="${CHANGELOG_CONTENT//'%'/'%25'}"
+          CHANGELOG_CONTENT="${CHANGELOG_CONTENT//$'\n'/'%0A'}"
+          CHANGELOG_CONTENT="${CHANGELOG_CONTENT//$'\r'/'%0D'}"
+          echo "changelog=$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
+          cat changelog.md
+
+      - name: Create Git Tag
+        id: tagger
+        if: steps.calculate_next_version.outputs.skip_release == 'false'
+        run: |
+          NEW_TAG="${{ steps.calculate_next_version.outputs.new_tag }}"
+          echo "Creating git tag $NEW_TAG"
+          git tag "$NEW_TAG" -m "Release $NEW_TAG"
+          git push origin "$NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        if: steps.calculate_next_version.outputs.skip_release == 'false' && steps.tagger.outputs.new_tag != ''
+        uses: ncipollo/release-action@v1.16.0
+        with:
+          tag: ${{ steps.tagger.outputs.new_tag }}
+          name: Release ${{ steps.tagger.outputs.new_tag }}
+          body: |
+            Release notes for ${{ steps.tagger.outputs.new_tag }}:
+            
+            ${{ steps.generate_changelog.outputs.changelog }}
+            
+            See the [action.yml](https://github.com/${{ github.repository }}/blob/${{ steps.tagger.outputs.new_tag }}/action.yml) for usage details.
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Major Version Tag Update (e.g., v1, v2)
+        if: steps.calculate_next_version.outputs.skip_release == 'false' && steps.tagger.outputs.new_tag != ''
+        run: |
+          NEW_TAG="${{ steps.tagger.outputs.new_tag }}"
+          MAJOR_VERSION=$(echo "$NEW_TAG" | cut -d. -f1) # Extracts 'v1' from 'v1.2.3' or 'v1' from 'v1'
+          
+          echo "Updating major version tag $MAJOR_VERSION to point to $NEW_TAG"
+          git tag -f "$MAJOR_VERSION" "$NEW_TAG" # Force update the major tag (e.g., v1)
+          git push origin "$MAJOR_VERSION" --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Output new tag
+        if: steps.calculate_next_version.outputs.skip_release == 'false'
+        run: echo "Successfully released and tagged ${{ steps.tagger.outputs.new_tag }}"
