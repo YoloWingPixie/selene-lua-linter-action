@@ -53,7 +53,7 @@ inputs:
     default: 'selene'
 runs:
   using: 'docker'
-  image: 'docker://ghcr.io/yolowingpixie/selene-lua-linter-action:dev'
+  image: 'docker://ghcr.io/yolowingpixie/selene-lua-linter-action:v1.0.0'
   args:
     - '--working-directory'
     - ${{ inputs.working-directory }}
