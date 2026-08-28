@@ -1,0 +1,147 @@
+name: Publish and test development image
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: selene-action-development-image
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/yolowingpixie/selene-lua-linter-action
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Task
+        uses: arduino/setup-task@e26d8975574116b0097a1161e0fe16ba75d84c1c # v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source image
+        run: task ci
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish development image
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:dev
+          provenance: mode=max
+          sbom: true
+
+      - name: Record development image digest
+        run: echo "${IMAGE}@${{ steps.publish.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+  test-published:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test basic lint
+        uses: ./
+        with:
+          config-path: ci-test-files/basic-lint/selene.toml
+          lint-path: ci-test-files/basic-lint
+
+      - name: Test working directory
+        uses: ./
+        with:
+          working-directory: ci-test-files/working-dir-test/sub/dir
+          config-path: selene_config.toml
+          lint-path: .
+
+      - name: Test specific valid file
+        uses: ./
+        with:
+          config-path: ci-test-files/specific-file-test/selene.toml
+          lint-path: ci-test-files/specific-file-test/good.lua
+          fail-on-warnings: "true"
+
+      - name: Test Selene arguments
+        uses: ./
+        with:
+          config-path: ci-test-files/selene-args-test/selene.toml
+          lint-path: ci-test-files/selene-args-test/ugly.lua
+          selene-args: --display-style quiet
+          report-as-annotations: "false"
+
+      - name: Test Selene Light
+        uses: ./
+        with:
+          config-path: ci-test-files/selene-light-test/selene.toml
+          lint-path: ci-test-files/selene-light-test
+          selene-variant: selene-light
+
+      - name: Test fail on warnings
+        id: warnings
+        continue-on-error: true
+        uses: ./
+        with:
+          config-path: ci-test-files/fail-on-warn-test/selene.toml
+          lint-path: ci-test-files/fail-on-warn-test/warning.lua
+          fail-on-warnings: "true"
+
+      - name: Verify warning failure
+        if: steps.warnings.outcome != 'failure'
+        run: exit 1
+
+      - name: Test syntax error
+        id: syntax
+        continue-on-error: true
+        uses: ./
+        with:
+          config-path: ci-test-files/syntax-error-test/selene.toml
+          lint-path: ci-test-files/syntax-error-test/syntax_error.lua
+
+      - name: Verify syntax failure
+        if: steps.syntax.outcome != 'failure'
+        run: exit 1
+
+      - name: Record tested digest
+        env:
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: echo "Tested ${IMAGE}@${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"

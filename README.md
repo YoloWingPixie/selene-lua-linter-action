@@ -32,6 +32,8 @@ but the prebuilt image ignores them.
 
 ## Releases
 
+The `dev` branch publishes the mutable `dev` image tag and tests that image through the action metadata.
+
 1. Set the exact image tag in `action.yml`.
 2. Commit the release change.
 3. Create and push the matching semantic-version tag.
