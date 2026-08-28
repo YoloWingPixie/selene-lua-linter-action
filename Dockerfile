@@ -16,12 +16,12 @@ RUN apk add --no-cache ca-certificates curl unzip \
     && curl --fail --location --silent --show-error \
         --output /tmp/selene.zip \
         "https://github.com/Kampfkarren/selene/releases/download/${SELENE_VERSION}/selene-${SELENE_VERSION}-linux.zip" \
-    && echo "${SELENE_SHA256}  /tmp/selene.zip" | sha256sum --check --strict \
+    && echo "${SELENE_SHA256}  /tmp/selene.zip" | sha256sum -c \
     && unzip -p /tmp/selene.zip selene > /out/selene \
     && curl --fail --location --silent --show-error \
         --output /tmp/selene-light.zip \
         "https://github.com/Kampfkarren/selene/releases/download/${SELENE_VERSION}/selene-light-${SELENE_VERSION}-linux.zip" \
-    && echo "${SELENE_LIGHT_SHA256}  /tmp/selene-light.zip" | sha256sum --check --strict \
+    && echo "${SELENE_LIGHT_SHA256}  /tmp/selene-light.zip" | sha256sum -c \
     && unzip -p /tmp/selene-light.zip selene > /out/selene-light \
     && chmod 0755 /out/selene /out/selene-light
 
