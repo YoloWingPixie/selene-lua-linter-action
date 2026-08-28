@@ -1,22 +1,21 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const (
-	seleneDefaultRepo    = "Kampfkarren/selene"
-	seleneDefaultVariant = "selene"
-	seleneDefaultVersion = "latest"
+	seleneDefaultVariant     = "selene"
+	initialOutputBufferBytes = 64 * 1024
+	maxSeleneOutputLineBytes = 1 << 20
 )
 
 type Config struct {
@@ -26,11 +25,8 @@ type Config struct {
 	SeleneArgs          string
 	FailOnWarnings      bool
 	ReportAsAnnotations bool
-	SeleneVersion       string
-	SeleneRepo          string
 	SeleneVariant       string
 	GithubWorkspace     string
-	GithubToken         string
 }
 
 type Annotation struct {
@@ -39,7 +35,7 @@ type Annotation struct {
 	EndLine string
 	Title   string
 	Message string
-	Level   string // "notice", "warning", or "failure"
+	Level   string
 }
 
 type SelenePrimaryLabel struct {
@@ -51,20 +47,20 @@ type SelenePrimaryLabel struct {
 }
 
 type SeleneFinding struct {
-	Severity     string             `json:"severity"` // "Warning", "Error"
-	Code         string             `json:"code"`     // e.g., "global_usage"
+	Severity     string             `json:"severity"`
+	Code         string             `json:"code"`
 	Message      string             `json:"message"`
 	PrimaryLabel SelenePrimaryLabel `json:"primary_label"`
 }
 
 func main() {
-	cfg, err := loadConfig()
+	cfg, err := loadConfig(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 		os.Exit(1)
 	}
 
-	selenePath, err := ensureSelene(cfg.SeleneVersion, cfg.SeleneRepo, cfg.SeleneVariant)
+	selenePath, err := resolveSelene(cfg.SeleneVariant)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error ensuring Selene: %v\n", err)
 		os.Exit(1)
@@ -77,24 +73,50 @@ func main() {
 	fmt.Println("Selene linting action completed successfully according to configuration.")
 }
 
-func loadConfig() (*Config, error) {
+func loadConfig(args []string) (*Config, error) {
+	flags := flag.NewFlagSet("selene-lua-linter-action", flag.ContinueOnError)
+	workingDirectory := flags.String("working-directory", getInput("INPUT_WORKING-DIRECTORY", "."), "")
+	configPath := flags.String("config-path", getInput("INPUT_CONFIG-PATH", ""), "")
+	lintPath := flags.String("lint-path", getInput("INPUT_LINT-PATH", "."), "")
+	seleneArgs := flags.String("selene-args", getInput("INPUT_SELENE-ARGS", ""), "")
+	failOnWarningsInput := flags.String("fail-on-warnings", getInput("INPUT_FAIL-ON-WARNINGS", "false"), "")
+	reportAsAnnotationsInput := flags.String(
+		"report-as-annotations",
+		getInput("INPUT_REPORT-AS-ANNOTATIONS", "true"),
+		"",
+	)
+	seleneVariant := flags.String("selene-variant", getInput("INPUT_SELENE-VARIANT", seleneDefaultVariant), "")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	if flags.NArg() != 0 {
+		return nil, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	failOnWarnings, err := strconv.ParseBool(*failOnWarningsInput)
+	if err != nil {
+		return nil, fmt.Errorf("fail-on-warnings must be true or false")
+	}
+	reportAsAnnotations, err := strconv.ParseBool(*reportAsAnnotationsInput)
+	if err != nil {
+		return nil, fmt.Errorf("report-as-annotations must be true or false")
+	}
 	cfg := &Config{
-		WorkingDirectory:    getInput("INPUT_WORKING-DIRECTORY", "."),
-		ConfigPath:          getInput("INPUT_CONFIG-PATH", ""),
-		LintPath:            getInput("INPUT_LINT-PATH", "."),
-		SeleneArgs:          getInput("INPUT_SELENE-ARGS", ""),
-		FailOnWarnings:      strings.ToLower(getInput("INPUT_FAIL-ON-WARNINGS", "false")) == "true",
-		ReportAsAnnotations: strings.ToLower(getInput("INPUT_REPORT-AS-ANNOTATIONS", "true")) == "true",
-		SeleneVersion:       getInput("INPUT_SELENE-VERSION", seleneDefaultVersion),
-		SeleneRepo:          getInput("INPUT_SELENE-REPO", seleneDefaultRepo),
-		SeleneVariant:       getInput("INPUT_SELENE-VARIANT", seleneDefaultVariant),
+		WorkingDirectory:    *workingDirectory,
+		ConfigPath:          *configPath,
+		LintPath:            *lintPath,
+		SeleneArgs:          *seleneArgs,
+		FailOnWarnings:      failOnWarnings,
+		ReportAsAnnotations: reportAsAnnotations,
+		SeleneVariant:       *seleneVariant,
 		GithubWorkspace:     os.Getenv("GITHUB_WORKSPACE"),
-		GithubToken:         os.Getenv("INPUT_GITHUB-TOKEN"),
 	}
 
 	if cfg.ConfigPath == "" {
+		return nil, fmt.Errorf("config-path is required")
 	}
-	// Ensure paths are absolute or relative to GITHUB_WORKSPACE
+	if cfg.GithubWorkspace == "" {
+		return nil, fmt.Errorf("GITHUB_WORKSPACE is required")
+	}
 	if !filepath.IsAbs(cfg.WorkingDirectory) {
 		cfg.WorkingDirectory = filepath.Join(cfg.GithubWorkspace, cfg.WorkingDirectory)
 	}
@@ -116,139 +138,15 @@ func getInput(name, defaultValue string) string {
 	return val
 }
 
-func ensureSelene(version, repo, variant string) (string, error) {
-	seleneBinaryPath := "/usr/local/bin/selene"
-
-	_, statErr := os.Stat(seleneBinaryPath)
-
-	if version != seleneDefaultVersion || (version == seleneDefaultVersion && os.IsNotExist(statErr)) {
-		fmt.Printf("Attempting to download Selene %s (%s variant) from %s...\n", version, variant, repo)
-
-		var downloadURL string
-		var assetToDownloadName string
-
-		if version == "latest" {
-			apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-			resp, httpErr := http.Get(apiURL)
-			if httpErr != nil {
-				return "", fmt.Errorf("failed to fetch latest release info from %s: %w", apiURL, httpErr)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				bodyBytes, _ := io.ReadAll(resp.Body)
-				return "", fmt.Errorf("failed to fetch latest release info from %s, status: %s, body: %s", apiURL, resp.Status, string(bodyBytes))
-			}
-
-			var releaseInfo struct {
-				Assets []struct {
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-				} `json:"assets"`
-			}
-			if decodeErr := decodeJSONBody(resp, &releaseInfo); decodeErr != nil {
-				return "", fmt.Errorf("failed to decode release info: %w", decodeErr)
-			}
-
-			foundAsset := false
-			expectedSuffix := "-linux.zip"
-			for _, asset := range releaseInfo.Assets {
-				if strings.HasPrefix(asset.Name, variant+"-") && strings.HasSuffix(asset.Name, expectedSuffix) {
-					downloadURL = asset.BrowserDownloadURL
-					assetToDownloadName = asset.Name
-					foundAsset = true
-					break
-				}
-			}
-			if !foundAsset {
-				return "", fmt.Errorf("could not find asset matching %s-VERSION%s for %s in latest release", variant, expectedSuffix, repo)
-			}
-		} else {
-			versionStr := strings.TrimPrefix(version, "v")
-			assetToDownloadName = fmt.Sprintf("%s-%s-linux.zip", variant, versionStr)
-			downloadURL = fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, version, assetToDownloadName)
-		}
-
-		fmt.Printf("Identified Selene asset for download: %s\n", assetToDownloadName)
-		fmt.Printf("Downloading from URL: %s\n", downloadURL)
-
-		resp, httpErr := http.Get(downloadURL)
-		if httpErr != nil {
-			return "", fmt.Errorf("failed to download Selene from %s: %w", downloadURL, httpErr)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return "", fmt.Errorf("failed to download Selene from %s, status: %s, body: %s", downloadURL, resp.Status, string(bodyBytes))
-		}
-
-		tmpZipFile, err := os.CreateTemp("", "selene-*.zip")
-		if err != nil {
-			return "", fmt.Errorf("failed to create temporary zip file: %w", err)
-		}
-		defer os.Remove(tmpZipFile.Name())
-
-		_, err = io.Copy(tmpZipFile, resp.Body)
-		if err != nil {
-			tmpZipFile.Close()
-			return "", fmt.Errorf("failed to write Selene zip to temporary file: %w", err)
-		}
-		tmpZipFile.Close()
-
-		zipReader, err := zip.OpenReader(tmpZipFile.Name())
-		if err != nil {
-			return "", fmt.Errorf("failed to open downloaded zip file %s: %w", tmpZipFile.Name(), err)
-		}
-		defer zipReader.Close()
-
-		var seleneZipFile *zip.File
-		for _, f := range zipReader.File {
-			if f.Name == variant {
-				seleneZipFile = f
-				break
-			}
-			if filepath.Base(f.Name) == variant && !f.FileInfo().IsDir() {
-				seleneZipFile = f
-				break
-			}
-		}
-
-		if seleneZipFile == nil {
-			return "", fmt.Errorf("could not find '%s' binary within the downloaded zip %s", variant, assetToDownloadName)
-		}
-
-		srcFile, err := seleneZipFile.Open()
-		if err != nil {
-			return "", fmt.Errorf("failed to open '%s' from zip: %w", seleneZipFile.Name, err)
-		}
-		defer srcFile.Close()
-
-		dstFile, err := os.OpenFile(seleneBinaryPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, seleneZipFile.Mode())
-		if err != nil {
-			return "", fmt.Errorf("failed to create destination file %s: %w", seleneBinaryPath, err)
-		}
-		defer dstFile.Close()
-
-		_, err = io.Copy(dstFile, srcFile)
-		if err != nil {
-			return "", fmt.Errorf("failed to copy '%s' from zip to %s: %w", seleneZipFile.Name, seleneBinaryPath, err)
-		}
-		if err := os.Chmod(seleneBinaryPath, 0755); err != nil {
-			return "", fmt.Errorf("failed to make %s executable: %w", seleneBinaryPath, err)
-		}
-
-		fmt.Printf("Selene %s (%s variant) downloaded and installed to %s\n", version, variant, seleneBinaryPath)
-	} else if statErr != nil && !os.IsNotExist(statErr) {
-		return "", fmt.Errorf("failed to stat selene binary at %s: %w", seleneBinaryPath, statErr)
-	} else {
-		fmt.Printf("Using existing Selene binary at %s for version '%s'.\n", seleneBinaryPath, version)
+func resolveSelene(variant string) (string, error) {
+	if variant != "selene" && variant != "selene-light" {
+		return "", fmt.Errorf("selene-variant must be selene or selene-light")
 	}
-	return seleneBinaryPath, nil
-}
-
-func decodeJSONBody(resp *http.Response, target interface{}) error {
-	lr := io.LimitReader(resp.Body, 10<<20)
-	return json.NewDecoder(lr).Decode(target)
+	path := filepath.Join("/usr/local/bin", variant)
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("preinstalled %s is unavailable: %w", variant, err)
+	}
+	return path, nil
 }
 
 func runLinter(selenePath string, cfg *Config) error {
@@ -288,29 +186,24 @@ func runLinter(selenePath string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("failed to get stderr pipe: %w", err)
-	}
+	cmd.Stderr = os.Stderr
 
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Selene: %w", err)
 	}
 
-	var seleneOutput []string
 	var annotations []Annotation
 
 	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, initialOutputBufferBytes), maxSeleneOutputLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
 			fmt.Println(line)
-			seleneOutput = append(seleneOutput, line)
 			continue
 		}
 
 		fmt.Println(line)
-		seleneOutput = append(seleneOutput, line)
 
 		if cfg.ReportAsAnnotations {
 			var finding SeleneFinding
@@ -326,12 +219,12 @@ func runLinter(selenePath string, cfg *Config) error {
 
 			level := "notice"
 			if levelString == "error" {
-				level = "failure"
+				level = "error"
 			} else if levelString == "warning" {
 				level = "warning"
 			}
 
-			title := fmt.Sprintf("Selene %s (%s)", strings.Title(finding.Severity), ruleName)
+			title := fmt.Sprintf("Selene %s (%s)", finding.Severity, ruleName)
 
 			filePath := finding.PrimaryLabel.Filename
 			if !filepath.IsAbs(filePath) {
@@ -354,14 +247,7 @@ func runLinter(selenePath string, cfg *Config) error {
 			})
 		}
 	}
-	if scanErr := scanner.Err(); scanErr != nil {
-		fmt.Fprintf(os.Stderr, "Error reading Selene stdout: %v\n", scanErr)
-	}
-
-	stderrBytes, _ := io.ReadAll(stderrPipe)
-	if len(stderrBytes) > 0 {
-		fmt.Fprintf(os.Stderr, "Selene stderr:\n%s\n", string(stderrBytes))
-	}
+	scanErr := scanner.Err()
 
 	seleneCmdErr := cmd.Wait()
 	seleneExitCode := 0
@@ -380,15 +266,21 @@ func runLinter(selenePath string, cfg *Config) error {
 	if cfg.ReportAsAnnotations && len(annotations) > 0 {
 		for _, ann := range annotations {
 			fmt.Printf("::%s file=%s,line=%s,title=%s::%s\n",
-				ann.Level, ann.File, ann.Line, ann.Title, ann.Message)
+				ann.Level,
+				workflowEscapeProperty(ann.File),
+				ann.Line,
+				workflowEscapeProperty(ann.Title),
+				workflowEscapeData(ann.Message),
+			)
 		}
 	}
+	if scanErr != nil {
+		return fmt.Errorf("failed to read Selene output: %w", scanErr)
+	}
 
-	// Check for any "failure" level annotations (includes parse errors)
-	// This must take precedence over exit code logic if critical errors are found.
 	hasFailureAnnotations := false
 	for _, ann := range annotations {
-		if ann.Level == "failure" {
+		if ann.Level == "error" {
 			hasFailureAnnotations = true
 			break
 		}
@@ -396,15 +288,12 @@ func runLinter(selenePath string, cfg *Config) error {
 
 	if hasFailureAnnotations {
 		fmt.Fprintf(os.Stderr, "Selene reported critical errors (e.g., parse errors) via annotations. Action will fail.\n")
-		// If seleneCmdErr is nil (e.g. Selene exited 0 or 1 despite parse errors),
-		// create a new error. Otherwise, wrap the existing one.
 		if seleneCmdErr != nil {
 			return fmt.Errorf("Selene reported critical errors (see annotations). Selene error: %w", seleneCmdErr)
 		}
 		return fmt.Errorf("Selene reported critical errors (see annotations)")
 	}
 
-	// Original decision logic based on seleneExitCode, now only if no "failure" annotations were found:
 	if seleneExitCode == 0 {
 		fmt.Println("Selene exited with code 0.")
 		hasLintingWarningsInAnnotations := false
@@ -428,9 +317,21 @@ func runLinter(selenePath string, cfg *Config) error {
 		}
 		fmt.Println("'fail-on-warnings' is false. Action successful despite warnings.")
 		return nil
-	} else { // seleneExitCode > 1
+	} else {
 		fmt.Printf("Selene exited with a critical error code: %d.\n", seleneExitCode)
 		fmt.Fprintf(os.Stderr, "Action will fail.\n")
 		return fmt.Errorf("Selene exited with a critical error code: %d. Selene error: %w", seleneExitCode, seleneCmdErr)
 	}
+}
+
+func workflowEscapeData(value string) string {
+	value = strings.ReplaceAll(value, "%", "%25")
+	value = strings.ReplaceAll(value, "\r", "%0D")
+	return strings.ReplaceAll(value, "\n", "%0A")
+}
+
+func workflowEscapeProperty(value string) string {
+	value = workflowEscapeData(value)
+	value = strings.ReplaceAll(value, ":", "%3A")
+	return strings.ReplaceAll(value, ",", "%2C")
 }

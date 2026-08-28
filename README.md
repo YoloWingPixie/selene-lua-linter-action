@@ -1,90 +1,42 @@
 # Selene Lua Linter Action
 
-[![CI - Selene Lua Linter Action](https://github.com/YoloWingPixie/selene-lua-linter-action/workflows/CI%20-%20Selene%20Lua%20Linter%20Action/badge.svg)](https://github.com/YoloWingPixie/selene-lua-linter-action/actions?query=workflow%3ACI+-+Selene+Lua+Linter+Action)
-
-**TL;DR: Lint your Lua code with [Selene](https://github.com/Kampfkarren/selene) directly in your GitHub Actions workflows. Get consistent results, code annotations, and fine-grained control.**
-
-This action lints Lua code using the Selene linter. It's designed to be highly configurable, report findings as GitHub code annotations, and run within a Docker container for consistent linting environments.
-
-## Features
-
-*   **Selene Powered:** Leverages the powerful Selene Lua linter.
-*   **GitHub Annotations:** Reports linting issues directly as annotations in your pull requests and commit checks.
-*   **Highly Configurable:** Control working directory, Selene configuration file path, specific files/directories to lint, and pass additional arguments to Selene.
-*   **Version Control:** Specify the Selene version, repository, and variant (full or light) to use.
-*   **Dockerized:** Ensures a consistent linting environment by running Selene inside a Docker container.
-*   **Workflow Control:** Option to fail the action on warnings.
+Run Selene from a prebuilt container and report findings as GitHub annotations.
+The action image includes Selene 0.30.1 and its light variant. Consumer jobs do
+not build the action or download Selene.
 
 ## Usage
 
-To use this action, add the following step to your GitHub Actions workflow YAML file (e.g., `.github/workflows/lint.yml`):
-
 ```yaml
-name: Lint Lua Code
-
-on: [push, pull_request]
-
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Lint Lua code with Selene
-        uses: YoloWingPixie/selene-lua-linter-action@v1 # Or your desired version/commit SHA
-        with:
-          # Required: Path to your Selene configuration file (e.g., selene.toml or .selene.toml)
-          config-path: 'selene.toml'
-
-          # Optional: Directory to run Selene in. Defaults to repository root.
-          # working-directory: '.'
-
-          # Optional: File or directory to lint, relative to working-directory. Defaults to '.' (all files).
-          # lint-path: 'src/'
-
-          # Optional: Additional arguments for Selene CLI.
-          # selene-args: '--display-style quiet'
-
-          # Optional: Fail the action if Selene reports warnings. Defaults to 'false'.
-          # fail-on-warnings: 'true'
-
-          # Optional: Report Selene findings as GitHub annotations. Defaults to 'true'.
-          # report-as-annotations: 'true'
-
-          # Optional: Selene version to use. Defaults to 'latest'.
-          # selene-version: 'v0.28.0'
-
-          # Optional: Selene repository. Defaults to 'Kampfkarren/selene'.
-          # selene-repo: 'Kampfkarren/selene'
-
-          # Optional: Selene variant ('selene' or 'selene-light'). Defaults to 'selene'.
-          # selene-variant: 'selene-light'
+- name: Lint Lua
+  uses: YoloWingPixie/selene-lua-linter-action@v1
+  with:
+    config-path: selene.toml
+    lint-path: src
+    fail-on-warnings: "false"
 ```
 
-### Inputs
+## Inputs
 
-| Name                    | Description                                                                                                | Required | Default                 |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------- | -------- | ----------------------- |
-| `working-directory`     | Directory where Selene will be executed, relative to repository root.                                      | `false`  | `.`                     |
-| `config-path`           | Path to Selene configuration file (e.g., `selene.toml`), relative to repository root.                      | `true`   |                         |
-| `lint-path`             | File or directory to lint, relative to `working-directory`.                                                | `false`  | `.`                     |
-| `selene-args`           | Additional arguments to pass directly to the Selene CLI.                                                   | `false`  | `''`                    |
-| `fail-on-warnings`      | If `true`, the action fails if Selene reports any warnings (exit code 1).                                  | `false`  | `false`                 |
-| `report-as-annotations` | If `true`, Selene findings are reported as GitHub code annotations.                                        | `false`  | `true`                  |
-| `selene-version`        | Version of Selene to use (e.g., 'v0.28.0', 'latest'). 'latest' resolves to the newest release.             | `false`  | `latest`                |
-| `selene-repo`           | Repository for Selene releases (owner/repo).                                                               | `false`  | `Kampfkarren/selene`    |
-| `selene-variant`        | Selene variant to download (`selene` or `selene-light`).                                                     | `false`  | `selene`                |
+| Input | Required | Default | Purpose |
+|---|---:|---|---|
+| `config-path` | Yes | | Selene configuration relative to the working directory. |
+| `working-directory` | No | `.` | Directory in which Selene runs. |
+| `lint-path` | No | `.` | File or directory passed to Selene. |
+| `selene-args` | No | | Additional Selene arguments. |
+| `fail-on-warnings` | No | `false` | Fail when Selene reports warnings. |
+| `report-as-annotations` | No | `true` | Emit GitHub workflow annotations. |
+| `selene-variant` | No | `selene` | Run `selene` or `selene-light`. |
 
-## Configuration
+`selene-version` and `selene-repo` remain accepted for workflow compatibility,
+but the prebuilt image ignores them.
 
-1.  **Create a Selene configuration file** (e.g., `selene.toml` or `.selene.toml`) in your repository. Refer to the [Selene documentation](https://kampfkarren.github.io/selene/usage/configuration.html) for configuration options.
-2.  **Update your workflow file** (e.g., `.github/workflows/lint.yml`) to use this action, ensuring the `config-path` input points to your Selene configuration file.
+## Releases
 
-## Contributing
+1. Set the exact image tag in `action.yml`.
+2. Commit the release change.
+3. Create and push the matching semantic-version tag.
+4. Make the GHCR package public after its first publication.
+5. Move the major action tag after the image publication succeeds.
 
-Contributions are welcome! Please feel free to submit a pull request or open an issue.
-
-## License
-
-This project is licensed under the terms of the MIT license. See [LICENSE](LICENSE) for details.
+The release workflow publishes only the exact image tag referenced by
+`action.yml`.

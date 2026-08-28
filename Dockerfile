@@ -1,69 +1,34 @@
-# ---- Builder Stage ----
-FROM golang:tip-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache git
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/action ./cmd/action
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-w -s" -o /out/action-entrypoint ./cmd/action
 
-WORKDIR /app
+FROM alpine:3.23 AS selene
 
-COPY . .
+ARG SELENE_VERSION=0.30.1
+ARG SELENE_SHA256=c8c0f2102cb37e5e3ee2c984b51946b8ea8cf7804b5ea067afdb42fd2b95ff6e
+ARG SELENE_LIGHT_SHA256=a1a4a5a458fd1a3ea9335b8b6446c6abe731306c41a2b6f28adcf1835e25f6d5
 
-# Build the Go application statically
-# CGO_ENABLED=0 for static linking, ldflags to reduce binary size.
-RUN echo "Building Go application..." && \
-    CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-w -s" \
-    -o /action-entrypoint ./cmd/action/main.go && \
-    echo "Go application built successfully." && \
-    ls -l /action-entrypoint
+RUN apk add --no-cache ca-certificates curl unzip \
+    && mkdir -p /out \
+    && curl --fail --location --silent --show-error \
+        --output /tmp/selene.zip \
+        "https://github.com/Kampfkarren/selene/releases/download/${SELENE_VERSION}/selene-${SELENE_VERSION}-linux.zip" \
+    && echo "${SELENE_SHA256}  /tmp/selene.zip" | sha256sum --check --strict \
+    && unzip -p /tmp/selene.zip selene > /out/selene \
+    && curl --fail --location --silent --show-error \
+        --output /tmp/selene-light.zip \
+        "https://github.com/Kampfkarren/selene/releases/download/${SELENE_VERSION}/selene-light-${SELENE_VERSION}-linux.zip" \
+    && echo "${SELENE_LIGHT_SHA256}  /tmp/selene-light.zip" | sha256sum --check --strict \
+    && unzip -p /tmp/selene-light.zip selene > /out/selene-light \
+    && chmod 0755 /out/selene /out/selene-light
 
-# ---- Selene Fetcher Stage ----
-FROM alpine:latest AS selene-fetcher
+FROM gcr.io/distroless/cc-debian12:nonroot
 
-RUN apk add --no-cache \
-    curl \
-    jq \
-    unzip
-
-ARG SELENE_REPO=Kampfkarren/selene
-ARG SELENE_VARIANT=selene # Standard variant, not selene-light for preloading
-WORKDIR /tmp/selene-download
-
-# Download and extract Selene using the existing script logic (simplified)
-RUN echo "Fetching latest Selene release from ${SELENE_REPO} for pre-installation..." && \
-    LATEST_RELEASE_ASSET_INFO=$(curl -fsSL "https://api.github.com/repos/${SELENE_REPO}/releases/latest" | jq --arg variant "$SELENE_VARIANT" -r '.assets[] | select(.name | test("^" + $variant + "(-[0-9.]+)?-linux\\.zip$")) | {name, url: .browser_download_url} | @json') && \
-    if [ -z "$LATEST_RELEASE_ASSET_INFO" ] || [ "$LATEST_RELEASE_ASSET_INFO" == "null" ]; then \
-        echo "Error: Could not find a suitable Selene release asset." >&2; \
-        exit 1; \
-    fi && \
-    LATEST_RELEASE_URL=$(echo "$LATEST_RELEASE_ASSET_INFO" | jq -r .url) && \
-    LATEST_RELEASE_FILENAME=$(echo "$LATEST_RELEASE_ASSET_INFO" | jq -r .name) && \
-    echo "Found asset: $LATEST_RELEASE_FILENAME" && \
-    echo "Downloading from: $LATEST_RELEASE_URL" && \
-    curl -fsSL -o selene_latest.zip "$LATEST_RELEASE_URL" && \
-    unzip -o selene_latest.zip -d /tmp/selene_extracted && \
-    SELENE_BINARY_PATH=$(find /tmp/selene_extracted -name "$SELENE_VARIANT" -type f | head -n 1) && \
-    if [ -z "$SELENE_BINARY_PATH" ]; then \
-        echo "Error: Selene binary not found after extraction." >&2; \
-        exit 1; \
-    fi && \
-    mv "$SELENE_BINARY_PATH" /usr/local/bin/selene && \
-    chmod +x /usr/local/bin/selene && \
-    echo "Selene binary from release moved to /usr/local/bin/selene" && \
-    rm selene_latest.zip && \
-    rm -rf /tmp/selene_extracted && \
-    echo "Cleaned up temporary files."
-
-# ---- Runner Stage ----
-FROM gcr.io/distroless/cc-debian12 AS runner
-
-# Copy CA certificates from a stage that has them (selene-fetcher is alpine, so it has them)
-# Distroless images often need these explicitly for HTTPS.
-COPY --from=selene-fetcher /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-
-COPY --from=selene-fetcher /usr/local/bin/selene /usr/local/bin/selene
-
-COPY --from=builder /action-entrypoint /action-entrypoint
-
-USER nonroot:nonroot
+COPY --from=selene /out/selene /usr/local/bin/selene
+COPY --from=selene /out/selene-light /usr/local/bin/selene-light
+COPY --from=builder /out/action-entrypoint /action-entrypoint
 
 ENTRYPOINT ["/action-entrypoint"]

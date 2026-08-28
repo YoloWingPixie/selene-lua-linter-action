@@ -1,5 +1,5 @@
 name: 'Selene Lua Linter Action'
-description: 'Lint Lua code with Selene. Highly configurable, supports annotations, and uses a Docker container for consistent results.'
+description: 'Lint Lua code with a prebuilt Selene container and GitHub annotations.'
 author: 'YoloWingPixie'
 branding:
   icon: 'moon'
@@ -38,18 +38,34 @@ inputs:
     default: 'true'
   selene-version:
     description: >
-      Version of Selene to use (e.g., 'v0.28.0', 'latest').
-      'latest' resolves to the newest release.
+      Deprecated and ignored. The action uses the Selene version packaged in
+      its release image.
     required: false
-    default: 'latest'
+    default: '0.30.1'
   selene-repo:
-    description: 'Repository for Selene releases (owner/repo).'
+    description: >
+      Deprecated and ignored. The packaged Selene release is used.
     required: false
     default: 'Kampfkarren/selene'
   selene-variant:
-    description: 'Selene variant to download (selene or selene-light).'
+    description: 'Packaged Selene variant to run: selene or selene-light.'
     required: false
     default: 'selene'
 runs:
   using: 'docker'
-  image: 'Dockerfile'
+  image: 'docker://ghcr.io/yolowingpixie/selene-lua-linter-action:v1.0.0'
+  args:
+    - '--working-directory'
+    - ${{ inputs.working-directory }}
+    - '--config-path'
+    - ${{ inputs.config-path }}
+    - '--lint-path'
+    - ${{ inputs.lint-path }}
+    - '--selene-args'
+    - ${{ inputs.selene-args }}
+    - '--fail-on-warnings'
+    - ${{ inputs.fail-on-warnings }}
+    - '--report-as-annotations'
+    - ${{ inputs.report-as-annotations }}
+    - '--selene-variant'
+    - ${{ inputs.selene-variant }}
